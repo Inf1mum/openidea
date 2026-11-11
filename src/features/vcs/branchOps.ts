@@ -74,7 +74,7 @@ async function askSmartCheckout(files: readonly string[]): Promise<CheckoutOptio
  * to rebase that branch onto the remote or drop its commits (one that is only behind is
  * fast-forwarded). Resolves true once switched.
  */
-async function performCheckout(
+export async function performCheckout(
   rev: string,
   success: () => string,
   repo: string | null = currentRepo(),

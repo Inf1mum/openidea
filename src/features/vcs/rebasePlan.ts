@@ -1,5 +1,5 @@
 /** Interactive rebase / Undo Commit model: ranges, plans and validation (pure). */
-import type { BranchInfo, Commit, RebaseAction, RebaseEntry } from "@/bindings";
+import type { Branch, BranchInfo, Commit, RebaseAction, RebaseEntry } from "@/bindings";
 
 export interface RebaseRow {
   commit: Commit;
@@ -15,17 +15,53 @@ export interface RebaseRange {
   commits: Commit[];
 }
 
+/** Why a history rewrite of a commit off the current branch was refused. */
+export const NOT_ON_CURRENT_BRANCH = "The commit is not in the current branch";
+
 /**
  * The commits an interactive rebase from `target` rewrites: `target..HEAD` plus
  * `target`, given `history` = HEAD's history, newest first (topological).
  */
 export function rebaseRange(target: Commit, history: readonly Commit[]): RebaseRange | { error: string } {
   const index = history.findIndex((c) => c.id === target.id);
-  if (index < 0) return { error: "The commit is not in the current branch" };
+  if (index < 0) return { error: NOT_ON_CURRENT_BRANCH };
   const commits = history.slice(0, index + 1);
   if (commits.some((c) => c.parents.length > 1))
     return { error: "Interactive rebase is not supported for a range that contains merge commits" };
   return { base: target.parents[0] ?? null, commits: [...commits].reverse() };
+}
+
+/**
+ * The branch a history rewrite of a commit that the current branch does not contain
+ * should run on (#2799): any branch holding the commit works while its history down to
+ * the commit is linear. `containing` lists every branch that holds it (`git branch -a
+ * --contains`); local and remote namesakes count as one branch, and a remote-only one
+ * is checked out so its local namesake is created.
+ */
+export function rewriteBranch(
+  containing: readonly string[],
+  branches: readonly Branch[],
+): { ref: string; name: string; upstream: string | null } | { error: string } {
+  const known = new Map(branches.map((b) => [b.name, b]));
+  // `abc` and `origin/abc` are the same branch: one identity, the local ref preferred.
+  const identityOf = (ref: string) => (known.get(ref)?.remote ? ref.slice(ref.indexOf("/") + 1) : ref);
+  const same = new Map<string, { local?: string; remote?: string }>();
+  for (const ref of containing) {
+    if (!known.has(ref)) continue;
+    const branch = same.get(identityOf(ref)) ?? {};
+    if (known.get(ref)!.remote) branch.remote = ref;
+    else branch.local = ref;
+    same.set(identityOf(ref), branch);
+  }
+  if (!same.size) return { error: NOT_ON_CURRENT_BRANCH };
+  if (same.size > 1) {
+    const names = [...same.keys()].map((n) => `'${n}'`).join(", ");
+    return { error: `The commit is contained in several branches (${names}); check out the one to rewrite first` };
+  }
+  const [name, branch] = [...same.entries()][0]!;
+  const local = branch.local;
+  const upstream = local ? (known.get(local)!.upstream ?? null) : branch.remote!;
+  return { ref: local ?? branch.remote!, name, upstream };
 }
 
 /** Why `commit` cannot be undone, or null. */

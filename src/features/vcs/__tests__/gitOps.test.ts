@@ -24,10 +24,12 @@ import {
   headPushed,
   initialRows,
   moveRow,
+  NOT_ON_CURRENT_BRANCH,
   planIsNoop,
   planProblem,
   protectedBranchProblem,
   rebaseRange,
+  rewriteBranch,
   singleCommitPlan,
   squashPlan,
   toEntries,
@@ -220,6 +222,35 @@ describe("interactive rebase plan", () => {
       { commit: "c4", action: "squash", message: "merged" },
       { commit: "c3", action: "pick", message: null },
     ]);
+  });
+
+  it("picks the branch to rewrite a commit on, treating namesakes as one branch (#2799)", () => {
+    const tracked = { ...branch("abc", "c3"), upstream: "origin/abc" };
+    const branches = [
+      branch("main", "c3"),
+      tracked,
+      branch("origin/abc", "c3", true),
+      branch("origin/other", "c3", true),
+    ];
+    // The local branch is preferred over its remote namesake.
+    expect(rewriteBranch(["abc", "origin/abc"], branches)).toEqual({ ref: "abc", name: "abc", upstream: "origin/abc" });
+    // A remote-only branch is rewritten by checking it out (creating its local namesake).
+    expect(
+      rewriteBranch(
+        ["origin/abc"],
+        branches.filter((b) => b.name !== "abc"),
+      ),
+    ).toEqual({
+      ref: "origin/abc",
+      name: "abc",
+      upstream: "origin/abc",
+    });
+    // Several branches holding the commit are ambiguous.
+    expect(rewriteBranch(["abc", "origin/other"], branches)).toMatchObject({
+      error: expect.stringContaining("several branches"),
+    });
+    // No branch at all (a tag-only commit) keeps the original refusal.
+    expect(rewriteBranch([], branches)).toEqual({ error: NOT_ON_CURRENT_BRANCH });
   });
 });
 

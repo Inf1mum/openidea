@@ -181,7 +181,7 @@ Right-click a commit for **Copy Revision Number** (`⌥⇧⌘C` / `Ctrl+Alt+Shif
 
 ### Rewrite history
 
-From the log you can **Edit Commit Message…**, **Fixup…**, **Squash Into…**, **Drop Commit**, **Squash Commits…** and **Interactively Rebase from Here…**. The interactive rebase dialog lets you pick, reword, edit, squash, fixup, drop and reorder commits. These actions also work for commits that are already pushed: rewriting them is confirmed first, and pushing afterwards needs a force push. Commits already pushed from a protected branch cannot be rewritten.
+From the log you can **Edit Commit Message…**, **Fixup…**, **Squash Into…**, **Drop Commit**, **Squash Commits…** and **Interactively Rebase from Here…**. The interactive rebase dialog lets you pick, reword, edit, squash, fixup, drop and reorder commits. These actions also work for commits that are already pushed: rewriting them is confirmed first, and pushing afterwards needs a force push. Commits already pushed from a protected branch cannot be rewritten. A commit the current branch does not contain can be rewritten as well, as long as the branch that holds it has a linear history down to it: OpenIDEA offers to check that branch out (creating the local branch for a remote one) and rewrites its history there, so the commits of a PR can be fixed up while another branch is checked out.
 
 Limits: interactive rebase doesn't support ranges with merge commits, and **Undo Commit…** works only on the latest commit (its changes go back to a changelist).
 

@@ -383,6 +383,8 @@
   "Current version": "Current version",
   "Last checked": "Last checked",
   "Check Now": "Check Now",
+  "Check Out and Rewrite": "Check Out and Rewrite",
+  "The commit is not on the current branch, but on '{name}'. Check out '{name}' and rewrite its history there?": "The commit is not on the current branch, but on '{name}'. Check out '{name}' and rewrite its history there?",
   "Check for updates automatically": "Check for updates automatically",
   "At startup and every 4 hours while OpenIDEA runs. Each new version is announced once per session.": "At startup and every 4 hours while OpenIDEA runs. Each new version is announced once per session.",
   "Checking for updates…": "Checking for updates…",

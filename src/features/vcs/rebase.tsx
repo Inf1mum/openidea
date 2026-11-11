@@ -4,7 +4,7 @@ import { commitRepo } from "./multiRoot";
  * Interactively Rebase from Here (IDEA's Git.Log.ContextMenu).
  */
 import { useState } from "react";
-import type { BranchInfo, Commit, RebaseAction, RebaseEntry } from "@/bindings";
+import type { Branch, BranchInfo, Commit, RebaseAction, RebaseEntry } from "@/bindings";
 import { call, commands } from "@/platform/ipc";
 import { Dialog, IconButton, Select, T } from "@/ui";
 import { workflowSettings } from "@/platform/workflowSettings";
@@ -17,15 +17,18 @@ import { rememberSetting } from "./confirmations";
 import { confirmDialog, openDialog } from "./dialogs";
 import { loadLogDetails } from "./logDetails";
 import { conflictsInstead, inProgress } from "./operations";
+import { performCheckout } from "./branchOps";
 import { runGitOperation, runOp, saveAll } from "./ops";
 import {
   headPushed,
   initialRows,
   moveRow,
+  NOT_ON_CURRENT_BRANCH,
   planIsNoop,
   planProblem,
   protectedBranchProblem,
   rebaseRange,
+  rewriteBranch,
   singleCommitPlan,
   squashPlan,
   toEntries,
@@ -123,8 +126,77 @@ export async function undoCommit(commit: Commit) {
 // ---------------------------------------------------------------------------
 // Rebase-based actions
 
+const capitalize = (verb: string) => verb.replace(/^\w/, (c) => c.toUpperCase());
+
+/**
+ * The commit is not on the current branch (it is contained in another branch, e.g. the
+ * `origin/abc` of an open PR): offers to check out the branch that holds it and rewrite
+ * its history there (#2799). The rewrite stays subject to the usual checks, which run
+ * after the switch against the checked-out branch. Resolves true once HEAD holds the
+ * commit.
+ */
+async function switchToRewriteTarget(target: Commit, verb: string, repo: string | null): Promise<boolean> {
+  const [details, allBranches] = await Promise.all([
+    loadLogDetails(target).catch(() => null),
+    call(commands.vcsBranches(repo)).catch(() => [] as Branch[]),
+  ]);
+  const pick = rewriteBranch(details?.containingBranches ?? [], allBranches);
+  if ("error" in pick) {
+    refuse(`Cannot ${verb}`, pick.error);
+    return false;
+  }
+  // Pushed history of a protected branch cannot be rewritten on any branch.
+  const protectedBranch = protectedProblem({ head: pick.name, upstream: pick.upstream });
+  if (protectedBranch) {
+    refuse(`Cannot ${verb}`, protectedBranch);
+    return false;
+  }
+  // The branch's own history down to the commit must be linear — checked before the switch.
+  const parent = target.parents[0];
+  try {
+    const history = await call(
+      commands.vcsLog(repo, {
+        branch: pick.ref,
+        path: null,
+        author: null,
+        text: null,
+        range: parent ? `${parent}..${pick.ref}` : null,
+        skip: 0,
+        limit: 0,
+      }),
+    );
+    const range = rebaseRange(target, history);
+    if ("error" in range) {
+      // The branch's history was just listed from its tip, so this can only be a race.
+      refuse(
+        `Cannot ${verb}`,
+        range.error === NOT_ON_CURRENT_BRANCH
+          ? `The branch '${pick.name}' has changed since; refresh the log and try again`
+          : range.error,
+      );
+      return false;
+    }
+  } catch (e) {
+    refuse(`Cannot ${verb}`, e instanceof Error ? e.message : String(e));
+    return false;
+  }
+  const ok = await confirmDialog({
+    title: capitalize(verb),
+    message: tx`The commit is not on the current branch, but on '${pick.name}'. Check out '${pick.name}' and rewrite its history there?`,
+    okLabel: tx("Check Out and Rewrite"),
+  });
+  if (!ok) return false;
+  if (!(await performCheckout(pick.ref, () => `Checked out ${pick.name}`, repo, true))) return false;
+  await refreshNow();
+  return useVcs.getState().branch?.head === pick.name;
+}
+
 /** The commits from `target` to HEAD, or a warning when they cannot be rewritten. */
-async function rangeFrom(target: Commit, verb: string): Promise<(RebaseRange & { repo: string | null }) | null> {
+async function rangeFrom(
+  target: Commit,
+  verb: string,
+  allowSwitch = true,
+): Promise<(RebaseRange & { repo: string | null }) | null> {
   const repo = commitRepo(target) ?? currentRepo();
   await refreshNow();
   const branch = useVcs.getState().branch;
@@ -148,6 +220,10 @@ async function rangeFrom(target: Commit, verb: string): Promise<(RebaseRange & {
     );
     const range = rebaseRange(target, history);
     if ("error" in range) {
+      if (range.error === NOT_ON_CURRENT_BRANCH && allowSwitch) {
+        if (await switchToRewriteTarget(target, verb, repo)) return rangeFrom(target, verb, false);
+        return null;
+      }
       refuse(`Cannot ${verb}`, range.error);
       return null;
     }
@@ -159,8 +235,8 @@ async function rangeFrom(target: Commit, verb: string): Promise<(RebaseRange & {
         return null;
       }
       const ok = await confirmDialog({
-        title: verb.replace(/^\w/, (c) => c.toUpperCase()),
-        message: pushedWarning(verb.replace(/^\w/, (c) => c.toUpperCase())),
+        title: capitalize(verb),
+        message: pushedWarning(capitalize(verb)),
         okLabel: "Continue",
         danger: true,
       });
@@ -338,8 +414,15 @@ export async function squashCommits(commits: Commit[]) {
 /**
  * Fixup… / Squash Into…: prepares a `fixup!` / `squash!` commit of the local changes
  * for `target` in the commit interface; the next interactive rebase autosquashes it.
+ * A commit the current branch does not contain is fixed up on the branch that holds it
+ * (#2799): it is checked out first, so the commit lands there.
  */
-export function prepareFixup(target: Commit, kind: "fixup" | "squash") {
+export async function prepareFixup(target: Commit, kind: "fixup" | "squash") {
+  const repo = commitRepo(target) ?? currentRepo();
+  // A merge base of `target` and HEAD that is `target` itself means HEAD already contains it.
+  const base = await call(commands.vcsMergeBase(repo, "HEAD", target.id)).catch(() => null);
+  if (base !== target.id && !(await switchToRewriteTarget(target, kind === "fixup" ? "fixup" : "squash into", repo)))
+    return;
   useCommit.setState({ message: `${kind}! ${target.summary}`, fixupTarget: target });
   openCommit();
 }
