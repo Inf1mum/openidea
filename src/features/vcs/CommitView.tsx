@@ -739,10 +739,17 @@ export function ChangesTree({ mode }: { mode: "commit" | "local" | "dialog" }) {
               void deleteFiles(deletable);
             }
           } else if (e.key === "F4") {
-            const n = selectedNodes().find((x) => x.type === "file");
-            if (n?.path) {
+            // Jump to Source, as the context menu's item on the same node: the
+            // working file of the keyboard's lead row. The event must stay here,
+            // too: the tree's own F4 activates like Enter, which under the commit
+            // interface shows a diff instead of the source (#2696).
+            const lead = treeRef.current?.leadKey();
+            const n = lead != null ? byKey.get(lead) : undefined;
+            if (n?.type === "file") {
               e.preventDefault();
-              void editorService().openFile(n.path, { focus: true });
+              e.stopPropagation();
+              // A deleted change leaves the menu's item disabled; its F4 does nothing.
+              if (n.path && n.kind !== "deleted") void editorService().openFile(n.path, { focus: true });
             }
           } else {
             // IDEA: Ctrl+C copies the file names, Ctrl+Shift+C the absolute paths (#1877).

@@ -334,3 +334,128 @@ describe("View Options › Show on Double-Click", () => {
     }
   });
 });
+
+describe("F4 jumps to the source of the selected change (#2696)", () => {
+  const file = (name: string, unstaged: FileStatus["unstaged"] = "modified"): FileStatus => ({
+    path: `/p/${name}`,
+    relPath: name,
+    staged: null,
+    unstaged,
+    renamedFrom: null,
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    // The Commit tool window's interface, where activate (Enter / double-click) opens diffs:
+    // F4 must open only the source, like the context menu's Jump to Source item.
+    modal(false);
+    openInput.mockClear();
+    openFile.mockClear();
+    openDiffDialog.mockClear();
+    useCommit.setState({ selection: [], checks: new Map(), groupByDir: false });
+    useToolWindowLayout.setState({ placements: {} });
+  });
+
+  const pressF4 = async (names: string[]) => {
+    useVcs.setState({
+      available: true,
+      root: "/p",
+      repo: "/p",
+      roots: ["/p"],
+      status: names.map((name) => file(name)),
+    });
+    render(<ChangesTree mode="commit" />);
+    const tree = await screen.findByRole("tree", { name: "Changes" });
+    tree.focus();
+    // Into the default change list's first file row (Home lands on the list's group).
+    fireEvent.keyDown(tree, { key: "Home" });
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    fireEvent.keyDown(tree, { key: "F4" });
+    return tree;
+  };
+
+  it("opens the selected file's source and no diff, like the menu's item", async () => {
+    await pressF4(["a.ts"]);
+    await vi.waitFor(() => expect(openFile.mock.calls).toEqual([["/p/a.ts", { focus: true }]]));
+    expect(openInput).not.toHaveBeenCalled();
+    expect(openDiffDialog).not.toHaveBeenCalled();
+  });
+
+  it("opens the lead file of a multi-selection, not the first-selected one", async () => {
+    useVcs.setState({
+      available: true,
+      root: "/p",
+      repo: "/p",
+      roots: ["/p"],
+      status: [file("a.ts"), file("b.ts")],
+    });
+    render(<ChangesTree mode="commit" />);
+    await screen.findByText("a.ts");
+    fireEvent.mouseDown(screen.getByText("a.ts").closest('[role="treeitem"]')!);
+    fireEvent.mouseDown(screen.getByText("b.ts").closest('[role="treeitem"]')!, { ctrlKey: true });
+    fireEvent.keyDown(screen.getByRole("tree", { name: "Changes" }), { key: "F4" });
+    await vi.waitFor(() => expect(openFile.mock.calls).toEqual([["/p/b.ts", { focus: true }]]));
+    expect(openInput).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a deleted change, like the disabled menu item", async () => {
+    useVcs.setState({
+      available: true,
+      root: "/p",
+      repo: "/p",
+      roots: ["/p"],
+      status: [file("a.ts", "deleted")],
+    });
+    render(<ChangesTree mode="commit" />);
+    const tree = await screen.findByRole("tree", { name: "Changes" });
+    tree.focus();
+    // Onto the deleted change's file row (Home lands on the list's group).
+    fireEvent.keyDown(tree, { key: "Home" });
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    fireEvent.keyDown(tree, { key: "F4" });
+    expect(openFile).not.toHaveBeenCalled();
+    expect(openInput).not.toHaveBeenCalled();
+    expect(openDiffDialog).not.toHaveBeenCalled();
+  });
+
+  it("opens no file when a directory leads, leaving expand/collapse to the tree", async () => {
+    useCommit.setState({ groupByDir: true });
+    useVcs.setState({
+      available: true,
+      root: "/p",
+      repo: "/p",
+      roots: ["/p"],
+      status: [file("src/a.ts")],
+    });
+    render(<ChangesTree mode="commit" />);
+    const tree = await screen.findByRole("tree", { name: "Changes" });
+    tree.focus();
+    // Onto the directory row (Home lands on the list's group).
+    fireEvent.keyDown(tree, { key: "Home" });
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    fireEvent.keyDown(tree, { key: "F4" });
+    expect(openFile).not.toHaveBeenCalled();
+    expect(openInput).not.toHaveBeenCalled();
+  });
+
+  it("opens the same file as the context menu's Jump to Source on that node", async () => {
+    await pressF4(["a.ts"]);
+    await vi.waitFor(() => expect(openFile).toHaveBeenCalledTimes(1));
+    const f = file("a.ts");
+    const node: ChangeNode = {
+      key: f.path,
+      type: "file",
+      label: "a.ts",
+      group: "changes",
+      files: [f],
+      path: f.path,
+    };
+    const menu = nodeMenu([node], ["/p"], { roots: [node] });
+    const jump = menu.find((m) => m.kind !== "separator" && "label" in m && m.label === "Jump to Source");
+    (jump as { run: () => void }).run();
+    expect(openFile.mock.calls).toEqual([
+      ["/p/a.ts", { focus: true }],
+      ["/p/a.ts", { focus: true }],
+    ]);
+  });
+});
